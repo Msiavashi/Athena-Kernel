@@ -1,0 +1,508 @@
+diff --git a/arch/x86/Kconfig b/arch/x86/Kconfig
+index a4d5f250b463..8b14309164db 100644
+--- a/arch/x86/Kconfig
++++ b/arch/x86/Kconfig
+@@ -2879,6 +2879,14 @@ config X86_SYSFB
+ 
+ endmenu
+ 
++menu "Athena scheduler"
++
++config SCHED_ATHENA
++	bool "Enable support for Athena scheduler"
++	depends on NUMA
++	---help---
++		Include support for page-table aware cross-numa scheduling.
++endmenu
+ 
+ menu "Executable file formats / Emulations"
+ 
+@@ -2925,6 +2933,7 @@ config COMPAT
+ 	def_bool y
+ 	depends on IA32_EMULATION || X86_X32
+ 
++
+ if COMPAT
+ config COMPAT_FOR_U64_ALIGNMENT
+ 	def_bool y
+diff --git a/include/linux/numa.h b/include/linux/numa.h
+index 110b0e5d0fb0..33c3eca23dcb 100644
+--- a/include/linux/numa.h
++++ b/include/linux/numa.h
+@@ -13,4 +13,17 @@
+ 
+ #define	NUMA_NO_NODE	(-1)
+ 
++#ifdef CONFIG_NUMA
++#ifdef CONFIG_SCHED_ATHENA
++
++/**
++ * TODO: This should be dynamically get number of sockets
++ * Currently this value only works for 2 socket machine.
++ * For more socket machines, this should be increased.
++ */
++#define NR_NODES 2
++
++#endif /* CONFIG_SCHED_ATHENA */
++#endif
++
+ #endif /* _LINUX_NUMA_H */
+diff --git a/include/linux/sched.h b/include/linux/sched.h
+index ca3f3eae8980..270a9f65b6a0 100644
+--- a/include/linux/sched.h
++++ b/include/linux/sched.h
+@@ -1764,4 +1764,57 @@ extern long sched_getaffinity(pid_t pid, struct cpumask *mask);
+ #define TASK_SIZE_OF(tsk)	TASK_SIZE
+ #endif
+ 
++#ifdef CONFIG_SCHED_ATHENA
++
++#define PMC_ESEL_UMASK_SHIFT 8
++#define PMC_ESEL_CMASK_SHIFT 24
++#define PMC_ESEL_ENTRY(event, umask, cmask)       \
++    (((event)&0xFFUL) |                           \
++     (((umask)&0xFFUL) << PMC_ESEL_UMASK_SHIFT) | \
++     (((cmask)&0xFFUL) << PMC_ESEL_CMASK_SHIFT))
++
++#define PMC_ESEL_USR (1ULL << 16)    /* User Mode */
++#define PMC_ESEL_OS (1ULL << 17)     /* Kernel Mode */
++#define PMC_ESEL_EDGE (1ULL << 18)   /* Edge detect */
++#define PMC_ESEL_PC (1ULL << 19)     /* Pin control */
++#define PMC_ESEL_INT (1ULL << 20)    /* APIC interrupt enable */
++#define PMC_ESEL_ANY (1ULL << 21)    /* Any thread */
++#define PMC_ESEL_ENABLE (1ULL << 22) /* Enable counters */
++#define PMC_ESEL_INV (1ULL << 23)    /* Invert counter mask */
++
++/* architectural performance counters (works on all Intel CPUs) */
++#define PMC_ARCH_CORE_CYCLES PMC_ESEL_ENTRY(0x3C, 0x00, 0)
++#define PMC_ARCH_INSTR_RETIRED PMC_ESEL_ENTRY(0xC0, 0x00, 0)
++#define PMC_ARCH_REF_CYCLES PMC_ESEL_ENTRY(0x3C, 0x01, 0)
++#define PMC_ARCH_LLC_REF PMC_ESEL_ENTRY(0x2E, 0x4F, 0)
++#define PMC_ARCH_LLC_MISSES PMC_ESEL_ENTRY(0x2E, 0x41, 0)
++#define PMC_ARCH_BRANCHES PMC_ESEL_ENTRY(0xC4, 0x00, 0)
++#define PMC_ARCH_BRANCH_MISSES PMC_ESEL_ENTRY(0xC5, 0x00, 0)
++
++/* this performance counter measures LLC misses as a proxy for mem bandwidth */
++#define PMC_LLC_MISSES (PMC_ARCH_LLC_MISSES | PMC_ESEL_USR | PMC_ESEL_OS | \
++                        PMC_ESEL_ENABLE)
++#define PMC_LLC_MISSES_ANY (PMC_ARCH_LLC_MISSES | PMC_ESEL_USR | PMC_ESEL_OS | \
++                            PMC_ESEL_ANY | PMC_ESEL_ENABLE)
++
++#define IA32_PERF_GLOBAL_CTRL_ENABLE 0x70000000f
++#define IA32_PERF_FIXED_CTRL_ENABLE 0x333
++
++#define PMC_UPDATE_PERIOD_MS 3000 /* The time interval to update the PMU counters */
++
++typedef struct {
++	u64 val;
++	u64 rate;
++	uint64_t tsc;  /* cycles. not used yet */
++	bool enable; /* enable or disable counter */
++} pmc_t;
++
++struct pmc_sample_struct {
++	unsigned long next_sample;  /* next jiffies to update the global sampling */
++	pmc_t llc_miss;
++	pmc_t dtlb_miss; /* not used yet */
++};
++
++#endif /* CONFIG_SCHED_ATHENA */
++
+ #endif
+diff --git a/include/linux/sched/sysctl.h b/include/linux/sched/sysctl.h
+index 715c97c2d1f6..e5b5169bf368 100644
+--- a/include/linux/sched/sysctl.h
++++ b/include/linux/sched/sysctl.h
+@@ -7,6 +7,10 @@
+ 
+ struct ctl_table;
+ 
++#ifdef CONFIG_SCHED_ATHENA
++extern unsigned int sysctl_athena_enable; /* 1 to enable */
++#endif
++
+ #ifdef CONFIG_DETECT_HUNG_TASK
+ extern int	     sysctl_hung_task_check_count;
+ extern unsigned int  sysctl_hung_task_panic;
+@@ -98,4 +102,8 @@ int sysctl_numa_pgtable_replication_misc_ctl(struct ctl_table *table, int write,
+ 			void __user *buffer, size_t *lenp, loff_t *ppos);
+ int sysctl_numa_migrate_pid_pgtable_ctl(struct ctl_table *table, int write,
+ 			void __user *buffer, size_t *lenp, loff_t *ppos);
++
++// athena sysctl handler
++int sched_athena_enable_handler(struct ctl_table *table, int write,
++			       void __user *buffer, size_t *lenp, loff_t *ppos);
+ #endif /* _LINUX_SCHED_SYSCTL_H */
+diff --git a/kernel/fork.c b/kernel/fork.c
+index 0a2124c0a5f5..fa38be3e6079 100644
+--- a/kernel/fork.c
++++ b/kernel/fork.c
+@@ -148,6 +148,45 @@ int nr_processes(void)
+ 	return total;
+ }
+ 
++#ifdef CONFIG_SCHED_ATHENA
++
++extern int least_bw_nid(void);
++extern unsigned int sysctl_athena_enable;
++
++/** 
++ *Finds the node of the page table based on pgd_t location
++ * in mm_struct 
++ */
++// static __always_inline int pgd_to_nid(pgd_t pgd) {
++// 	return page_to_nid(pgd_page(pgd));
++// }
++
++// static int count_node_processes(int node)
++// {
++// 	int processes = 0;
++//     struct task_struct *p, *t;
++// 	for_each_process_thread(p, t){
++// 		if (cpu_to_node(task_cpu(t)) == node){
++// 			++processes;
++// 		}
++// 	}
++// 	return processes;
++// }
++// /**
++//  * returns the NUMA node which has least number of processes
++//  * assigned to it.
++//  */
++// inline int least_process_loaded_node(void){
++// 	int node, count = 0, ret_node; 
++//     for_each_node(node){
++// 		// tmp = count_node_processes(node);
++// 		// if (tmp > count){
++// 		// }
++//     }
++// }
++
++#endif 
++
+ void __weak arch_release_task_struct(struct task_struct *tsk)
+ {
+ }
+@@ -1723,6 +1762,7 @@ static __latent_entropy struct task_struct *copy_process(
+ #ifdef CONFIG_NUMA
+ 	p->mempolicy = mpol_dup(p->mempolicy);
+ 	if (IS_ERR(p->mempolicy)) {
++		printk(KERN_DEBUG "[ATHENA] p->mempolicy set failed.\n");
+ 		retval = PTR_ERR(p->mempolicy);
+ 		p->mempolicy = NULL;
+ 		goto bad_fork_cleanup_threadgroup_lock;
+@@ -2115,7 +2155,18 @@ long _do_fork(unsigned long clone_flags,
+ 		init_completion(&vfork);
+ 		get_task_struct(p);
+ 	}
+-
++#ifdef CONFIG_SCHED_ATHENA
++	/**
++	 * @brief Athena: TODO: These might be done erlier in `copy process`/mpol_dup
++	 * This is a temporary workaround to bypass numactl
++	 */
++	if(sysctl_athena_enable){
++		if(!(clone_flags & CLONE_VM)){
++			nodemask_t node_mask = nodemask_of_node(least_bw_nid());
++			mpol_rebind_mm(p->mm, &node_mask);
++		}
++	}	
++#endif
+ 	wake_up_new_task(p);
+ 
+ 	/* forking complete and child started to run, tell ptracer */
+diff --git a/kernel/sched/core.c b/kernel/sched/core.c
+index 211890edf37e..bcbc30582b40 100644
+--- a/kernel/sched/core.c
++++ b/kernel/sched/core.c
+@@ -21,6 +21,15 @@
+ 
+ DEFINE_PER_CPU_SHARED_ALIGNED(struct rq, runqueues);
+ 
++#ifdef CONFIG_SCHED_ATHENA
++
++extern void update_pmcs(void);
++extern int least_bw_nid(void);
++DECLARE_PER_CPU(struct pmc_sample_struct, pmc_sample);
++
++#endif
++
++
+ #if defined(CONFIG_SCHED_DEBUG) && defined(HAVE_JUMP_LABEL)
+ /*
+  * Debugging: various feature bits
+@@ -2201,9 +2210,20 @@ static void __sched_fork(unsigned long clone_flags, struct task_struct *p)
+ 	}
+ 
+ 	if (clone_flags & CLONE_VM)
++		/* set the preferred nid of the parent to the child task (thread) */
+ 		p->numa_preferred_nid = current->numa_preferred_nid;
+-	else
++	else {
++#ifdef CONFIG_SCHED_ATHENA
++		if(likely(sysctl_athena_enable)){
++			// TODO: Athena: set preferred_id least busy node
++			p->numa_preferred_nid = least_bw_nid();
++		}else{
++			p->numa_preferred_nid = -1;
++		}
++#else
+ 		p->numa_preferred_nid = -1;
++#endif /* CONFIG_SCHED_ATHENA */
++	}
+ 
+ 	p->node_stamp = 0ULL;
+ 	p->numa_scan_seq = p->mm ? p->mm->numa_scan_seq : 0;
+@@ -3106,7 +3126,17 @@ void scheduler_tick(void)
+ 
+ 	perf_event_task_tick();
+ 
++
+ #ifdef CONFIG_SMP
++#ifdef CONFIG_SCHED_ATHENA
++	if (sysctl_athena_enable){
++		if ((this_cpu_ptr(&pmc_sample)->next_sample == 0) 
++				|| time_after_eq(jiffies, this_cpu_ptr(&pmc_sample)->next_sample)){
++			update_pmcs();
++		}
++	}
++#endif
++
+ 	rq->idle_balance = idle_cpu(cpu);
+ 	trigger_load_balance(rq);
+ #endif
+diff --git a/kernel/sched/fair.c b/kernel/sched/fair.c
+index edf3a5e7e728..c10766bec682 100644
+--- a/kernel/sched/fair.c
++++ b/kernel/sched/fair.c
+@@ -25,6 +25,16 @@
+ 
+ #include <trace/events/sched.h>
+ 
++#ifdef CONFIG_NUMA
++#ifdef CONFIG_SCHED_ATHENA
++
++/* Holds a calculated number indicating the bandwidth bussiness of each NUMA node */
++// uint64_t numa_nodes_memory_usage_rate[NR_NODES] = {0};
++
++#endif
++#endif
++
++
+ /*
+  * Targeted preemption latency for CPU-bound tasks:
+  *
+@@ -1040,6 +1050,9 @@ unsigned int sysctl_numa_balancing_scan_delay = 1000;
+ /* enable/disable control for pgtable migration feature */
+ unsigned int sysctl_numa_pgtable_migration = 0;
+ 
++/* enable/disable for Athena pgtable-aware scheduler */
++unsigned int sysctl_athena_enable = 0;
++
+ struct numa_group {
+ 	atomic_t refcount;
+ 
+@@ -10450,3 +10463,162 @@ __init void init_sched_fair_class(void)
+ #endif /* SMP */
+ 
+ }
++
++#ifdef CONFIG_NUMA
++#ifdef CONFIG_SCHED_ATHENA
++/**
++ * @brief All functions in this sections need to be optimized
++ * 		  (e.g. inline, __always_inline, etc)
++ */
++
++#include <asm/msr.h>
++
++/**
++ * @brief Construct a new define per cpu object
++ */
++DEFINE_PER_CPU(struct pmc_sample_struct, pmc_sample);
++
++EXPORT_PER_CPU_SYMBOL(pmc_sample);
++
++/* TODO: Following functions might be better to be in independent module */
++
++/**
++ * @brief Triggers a pmc event selector
++ * 
++ * @param event_sel 
++ * @param store_register a general purpose pmu reg
++ */
++void start_pmc_event(u64 event_sel, u64 store_register){
++	wrmsrl(store_register, event_sel);
++}
++
++EXPORT_SYMBOL(start_pmc_event);
++
++/**
++ * @brief Triggers a pmc event selector for specific cpu
++ * 
++ * @param event_sel 
++ * @param store_register a general purpose pmu reg
++ */
++void start_cpu_pmc_event(int cpu, u64 event_sel, u64 store_register){
++	wrmsrl_on_cpu(cpu, store_register, event_sel);
++}
++
++EXPORT_SYMBOL(start_cpu_pmc_event);
++
++/**
++ * @brief read a single MSR register
++ * 
++ * @param from_register 
++ * @return u64 
++ */
++u64 read_pmc_val(u64 from_register){
++	u64 val;
++	rdmsrl(from_register, val);
++	return val;
++}
++
++EXPORT_SYMBOL(read_pmc_val);
++
++/**
++ * @brief update a single counter
++ * 
++ * @param event_sel 
++ */
++void update_pmc(unsigned long long event_sel){
++	u64 val;
++	switch (event_sel) {
++	case PMC_LLC_MISSES:
++		/* TODO: May be optimized */
++		val = read_pmc_val(MSR_IA32_PERFCTR0);
++		this_cpu_ptr(&pmc_sample)->llc_miss.rate
++					= val - this_cpu_ptr(&pmc_sample)->llc_miss.val;
++		this_cpu_ptr(&pmc_sample)->llc_miss.val = val;
++		break;
++	default:
++		// panic?!
++		break;
++	}
++}
++
++EXPORT_SYMBOL(update_pmc);
++
++/**
++ * @brief update all pmc_sample_struct counters
++ */
++void update_pmcs(void){
++	update_pmc(PMC_LLC_MISSES);
++	/* Read dTLB Misses and other counters */
++	this_cpu_ptr(&pmc_sample)->next_sample = jiffies + msecs_to_jiffies(PMC_UPDATE_PERIOD_MS);
++}
++
++EXPORT_SYMBOL(update_pmcs);
++
++/**
++ * @brief Returns the node id with least memory BW usage.
++ * TODO: This should be optimized to reduce the overhead of loops.
++ * 		 Probably with some data structure instead of dynamic calc.
++ */
++int least_bw_nid(void){
++	int node, cpu;
++	u64 ret_node = 0, node_rate = 0;
++	for_each_node(node){
++		u64 tmp = 0;
++		for_each_cpu(cpu, cpumask_of_node(node)){
++			tmp += per_cpu(pmc_sample, cpu).llc_miss.rate;
++		}
++		if ((node == 0) || (node_rate > tmp)){
++			node_rate = tmp;
++			ret_node = node;
++		}
++	}
++	return ret_node;
++}
++
++EXPORT_SYMBOL(least_bw_nid);
++
++void __athena_init_pmc(void){
++	// enable fixed function counters
++    wrmsrl(MSR_CORE_PERF_FIXED_CTR_CTRL, IA32_PERF_FIXED_CTRL_ENABLE);
++	// enable global general purpose counters
++    wrmsrl(MSR_CORE_PERF_GLOBAL_CTRL, IA32_PERF_GLOBAL_CTRL_ENABLE);
++}
++
++EXPORT_SYMBOL(__athena_init_pmc);
++
++/* enable/disable handler of sysctl_sched_enable variable.*/
++int sched_athena_enable_handler(struct ctl_table *table, int write, void __user *buffer,
++                                    size_t *lenp, loff_t *ppos)
++{
++	struct ctl_table t;
++	int err;
++
++	if (write && !capable(CAP_SYS_ADMIN))
++		return -EPERM;
++
++	t = *table;
++	err = proc_dointvec_minmax(&t, write, buffer, lenp, ppos);
++	if (err < 0)
++		return err;
++
++	/*
++	 * Perform required actions here.
++	 */
++	if(sysctl_athena_enable){
++		int cpu;
++		__athena_init_pmc();
++		// Trigger LLC miss counter
++		for_each_possible_cpu(cpu){
++			start_cpu_pmc_event(cpu, PMC_LLC_MISSES, MSR_P6_EVNTSEL0);
++		}
++	}else {
++		// TODO: reset pmu counters/registers
++	}
++	
++	printk(KERN_DEBUG "[ATHENA] enabled: %i\n", sysctl_athena_enable);
++	
++	return err;
++}
++
++#endif /* CONFIG_SCHED_ATHENA */
++#endif /* CONFIG_NUMA */
+\ No newline at end of file
+diff --git a/kernel/sched/sched.h b/kernel/sched/sched.h
+index cb467c221b15..047e620b6ca1 100644
+--- a/kernel/sched/sched.h
++++ b/kernel/sched/sched.h
+@@ -1038,6 +1038,7 @@ static inline void rq_repin_lock(struct rq *rq, struct rq_flags *rf)
+ }
+ 
+ #ifdef CONFIG_NUMA
++
+ enum numa_topology_type {
+ 	NUMA_DIRECT,
+ 	NUMA_GLUELESS_MESH,
+@@ -1046,6 +1047,7 @@ enum numa_topology_type {
+ extern enum numa_topology_type sched_numa_topology_type;
+ extern int sched_max_numa_distance;
+ extern bool find_numa_distance(int distance);
++
+ #endif
+ 
+ #ifdef CONFIG_NUMA
+diff --git a/kernel/sysctl.c b/kernel/sysctl.c
+index 01716f289ed2..3c22eb83148b 100644
+--- a/kernel/sysctl.c
++++ b/kernel/sysctl.c
+@@ -391,6 +391,15 @@ static struct ctl_table kern_table[] = {
+ #endif /* CONFIG_SCHEDSTATS */
+ #endif /* CONFIG_SMP */
+ #ifdef CONFIG_NUMA
++#ifdef CONFIG_SCHED_ATHENA	
++	{
++		.procname   = "athena_enable",
++		.data		= &sysctl_athena_enable,
++		.maxlen		= sizeof(unsigned int),
++		.mode		= 0644,
++		.proc_handler	= sched_athena_enable_handler,
++	},
++#endif 	
+ #ifdef CONFIG_PGTABLE_REPLICATION
+ 	{
+ 		.procname	= "pgtable_replication",
