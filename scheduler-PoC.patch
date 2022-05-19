@@ -1,8 +1,8 @@
 diff --git a/arch/x86/Kconfig b/arch/x86/Kconfig
-index a4d5f250b463..8b14309164db 100644
+index a4d5f250b463..5372a9f5c0fc 100644
 --- a/arch/x86/Kconfig
 +++ b/arch/x86/Kconfig
-@@ -2879,6 +2879,14 @@ config X86_SYSFB
+@@ -2879,6 +2879,15 @@ config X86_SYSFB
  
  endmenu
  
@@ -13,11 +13,12 @@ index a4d5f250b463..8b14309164db 100644
 +	depends on NUMA
 +	---help---
 +		Include support for page-table aware cross-numa scheduling.
++		Please note that enabling this will disable HW counters for perf tool.
 +endmenu
  
  menu "Executable file formats / Emulations"
  
-@@ -2925,6 +2933,7 @@ config COMPAT
+@@ -2925,6 +2934,7 @@ config COMPAT
  	def_bool y
  	depends on IA32_EMULATION || X86_X32
  
@@ -25,6 +26,69 @@ index a4d5f250b463..8b14309164db 100644
  if COMPAT
  config COMPAT_FOR_U64_ALIGNMENT
  	def_bool y
+diff --git a/arch/x86/events/core.c b/arch/x86/events/core.c
+index 45b2b1c93d04..2b8a764c7d25 100644
+--- a/arch/x86/events/core.c
++++ b/arch/x86/events/core.c
+@@ -1762,6 +1762,18 @@ ssize_t x86_event_sysfs_show(char *page, u64 config, u64 event)
+ static struct attribute_group x86_pmu_attr_group;
+ static struct attribute_group x86_pmu_caps_group;
+ 
++#ifdef CONFIG_SCHED_ATHENA
++/**
++ * @brief  This may cause problem for perf to profile applications.
++ * @todo Athena: fix this.
++ * @return int 
++ */
++static int __init init_hw_perf_events(void)
++{
++        printk(KERN_DEBUG "[Athena] is enabled: only software events are available in perf.\n");
++        return 0;
++}
++#else
+ static int __init init_hw_perf_events(void)
+ {
+ 	struct x86_pmu_quirk *quirk;
+@@ -1883,6 +1895,7 @@ static int __init init_hw_perf_events(void)
+ 	cpuhp_remove_state(CPUHP_PERF_X86_PREPARE);
+ 	return err;
+ }
++#endif
+ early_initcall(init_hw_perf_events);
+ 
+ static inline void x86_pmu_read(struct perf_event *event)
+diff --git a/include/linux/athena.h b/include/linux/athena.h
+new file mode 100644
+index 000000000000..0c4a3ddcf44e
+--- /dev/null
++++ b/include/linux/athena.h
+@@ -0,0 +1,25 @@
++#ifndef ATHENA_H
++#define ATHENA_H
++#include <linux/types.h>
++#include <linux/sched.h>
++
++struct athena_pmc_callbacks {
++	int 	(*pmcs_alloc_per_thread_data)(unsigned long,struct task_struct*);
++	void	(*pmcs_save_callback)(void*, int);
++	void	(*pmcs_restore_callback)(void*, int);
++	void 	(*pmcs_tbs_tick)(void*, int);
++	void	(*pmcs_exec_thread)(struct task_struct*);
++	void	(*pmcs_free_per_thread_data)(struct task_struct*);
++	void	(*pmcs_exit_thread)(struct task_struct*);
++	int		(*get_pmc_val)(struct task_struct* task, uint64_t pmc_event, uint64_t* value);
++};
++
++int get_pmc_val(struct task_struct* task, uint64_t pmc_event, uint64_t* value);
++int pmcs_alloc_per_thread_data(unsigned long clone_flags, struct task_struct *p);
++void pmcs_save_callback(void* prof, int cpu);
++void pmcs_restore_callback(void* prof, int cpu);
++void pmcs_tbs_tick(void* prof, int cpu);
++void pmcs_exec_thread(struct task_struct* tsk);
++void pmcs_free_per_thread_data(struct task_struct* tsk);
++void pmcs_exit_thread(struct task_struct* tsk);
++#endif
+\ No newline at end of file
 diff --git a/include/linux/numa.h b/include/linux/numa.h
 index 110b0e5d0fb0..33c3eca23dcb 100644
 --- a/include/linux/numa.h
@@ -48,10 +112,21 @@ index 110b0e5d0fb0..33c3eca23dcb 100644
 +
  #endif /* _LINUX_NUMA_H */
 diff --git a/include/linux/sched.h b/include/linux/sched.h
-index ca3f3eae8980..270a9f65b6a0 100644
+index ca3f3eae8980..181ffa8ecadc 100644
 --- a/include/linux/sched.h
 +++ b/include/linux/sched.h
-@@ -1764,4 +1764,57 @@ extern long sched_getaffinity(pid_t pid, struct cpumask *mask);
+@@ -1168,6 +1168,10 @@ struct task_struct {
+ 	void				*security;
+ #endif
+ 
++#ifdef CONFIG_SCHED_ATHENA 
++       void *pmc;                      /* Per-thread PMC-specific data. Would be allocated by the kernel module */
++       unsigned char prof_enabled;     /* This field must be one for the profiler to be active in the current task */
++#endif
+ 	/*
+ 	 * New fields for task_struct should be added above here, so that
+ 	 * they are included in the randomized portion of task_struct.
+@@ -1764,4 +1768,57 @@ extern long sched_getaffinity(pid_t pid, struct cpumask *mask);
  #define TASK_SIZE_OF(tsk)	TASK_SIZE
  #endif
  
@@ -133,11 +208,221 @@ index 715c97c2d1f6..e5b5169bf368 100644
 +int sched_athena_enable_handler(struct ctl_table *table, int write,
 +			       void __user *buffer, size_t *lenp, loff_t *ppos);
  #endif /* _LINUX_SCHED_SYSCTL_H */
+diff --git a/kernel/Makefile b/kernel/Makefile
+index f85ae5dfa474..45cb7c11c874 100644
+--- a/kernel/Makefile
++++ b/kernel/Makefile
+@@ -42,6 +42,7 @@ obj-y += irq/
+ obj-y += rcu/
+ obj-y += livepatch/
+ 
++obj-$(CONFIG_SCHED_ATHENA) += athena.o
+ obj-$(CONFIG_CHECKPOINT_RESTORE) += kcmp.o
+ obj-$(CONFIG_FREEZER) += freezer.o
+ obj-$(CONFIG_PROFILING) += profile.o
+diff --git a/kernel/athena.c b/kernel/athena.c
+new file mode 100644
+index 000000000000..9ff5cf14c6bc
+--- /dev/null
++++ b/kernel/athena.c
+@@ -0,0 +1,162 @@
++#include <linux/athena.h>
++#include <linux/list.h>
++#include <linux/err.h>
++#include <linux/slab.h>
++#include <linux/rwlock.h>
++#include <linux/rcupdate.h>
++
++extern unsigned int sysctl_athena_enable;
++DEFINE_RWLOCK(pmc_ops_lock);
++
++struct athena_pmc_callbacks pmc_callbacks;
++
++EXPORT_SYMBOL(pmc_callbacks);
++
++
++/* Invoked when forking a process/thread */
++int pmcs_alloc_per_thread_data(unsigned long clone_flags, struct task_struct *p)
++{
++	int ret = 0;
++	unsigned long flags;
++
++	if(!sysctl_athena_enable)
++		return 0;
++
++	read_lock_irqsave(&pmc_ops_lock, flags);
++
++	if (!pmc_callbacks.pmcs_alloc_per_thread_data) {
++		read_unlock_irqrestore(&pmc_ops_lock, flags);
++		return 0;
++	}
++
++	read_unlock_irqrestore(&pmc_ops_lock, flags);
++
++	/* Invoke the allocation operation (may block) */
++	ret = pmc_callbacks.pmcs_alloc_per_thread_data(clone_flags, p);
++
++	return ret;
++}
++
++/* Invoked when a context switch out takes place */
++void pmcs_save_callback(void *prof, int cpu)
++{
++	if(!sysctl_athena_enable)
++		return;
++
++	if (!pmc_callbacks.pmcs_save_callback)
++		return;
++
++	rcu_read_lock();
++
++	pmc_callbacks.pmcs_save_callback(prof, cpu);
++
++	rcu_read_unlock();
++}
++
++/* Invoked when a context switch in takes place */
++void pmcs_restore_callback(void *prof, int cpu)
++{
++	if(!sysctl_athena_enable)
++		return;
++
++	if (!pmc_callbacks.pmcs_restore_callback)
++		return;
++
++	rcu_read_lock();
++
++	pmc_callbacks.pmcs_restore_callback(prof, cpu);
++
++	rcu_read_unlock();
++}
++
++/* Invoked from scheduler_tick() */
++void pmcs_tbs_tick(void *prof, int cpu)
++{
++	if(!sysctl_athena_enable)
++		return;
++
++	if (!pmc_callbacks.pmcs_tbs_tick)
++		return;
++
++	rcu_read_lock();
++
++	pmc_callbacks.pmcs_tbs_tick(prof, cpu);
++
++	rcu_read_unlock();
++}
++
++/* Invoked when a process calls exec() */
++void pmcs_exec_thread(struct task_struct *tsk)
++{
++	if(!sysctl_athena_enable)
++		return;
++
++	if (!pmc_callbacks.pmcs_exec_thread)
++		return;
++
++	rcu_read_lock();
++
++	pmc_callbacks.pmcs_exec_thread(tsk);
++
++	rcu_read_unlock();
++}
++
++/* Invoked when the kernel frees up the process descriptor */
++void pmcs_free_per_thread_data(struct task_struct *tsk)
++{
++	unsigned long flags;
++
++	if(!sysctl_athena_enable)
++		return;
++
++	read_lock_irqsave(&pmc_ops_lock, flags);
++
++	if (!pmc_callbacks.pmcs_free_per_thread_data) {
++		read_unlock_irqrestore(&pmc_ops_lock, flags);
++		return;
++	}
++
++	read_unlock_irqrestore(&pmc_ops_lock, flags);
++
++	pmc_callbacks.pmcs_free_per_thread_data(tsk);
++}
++
++/* Invoked when a process exits */
++void pmcs_exit_thread(struct task_struct *tsk)
++{
++	unsigned long flags;
++
++	if(!sysctl_athena_enable)
++		return;
++
++	read_lock_irqsave(&pmc_ops_lock, flags);
++
++	if (!pmc_callbacks.pmcs_exit_thread) {
++		read_unlock_irqrestore(&pmc_ops_lock, flags);
++		return;
++	}
++
++	read_unlock_irqrestore(&pmc_ops_lock, flags);
++
++	pmc_callbacks.pmcs_exit_thread(tsk);
++}
++
++/* Call this function to get value of a counter */
++int get_pmc_val(struct task_struct *task, uint64_t pmc_event, uint64_t *value)
++{
++	int ret = -1;
++
++	if(!sysctl_athena_enable)
++		return ret;
++
++	if (!pmc_callbacks.get_pmc_val)
++		return ret;
++
++	rcu_read_lock();
++
++	ret = pmc_callbacks.get_pmc_val(task, pmc_event, value);
++
++	rcu_read_unlock();
++
++	return ret;
++}
+diff --git a/kernel/exit.c b/kernel/exit.c
+index c3c7ac560114..8acfbbd0010a 100644
+--- a/kernel/exit.c
++++ b/kernel/exit.c
+@@ -62,6 +62,7 @@
+ #include <linux/random.h>
+ #include <linux/rcuwait.h>
+ #include <linux/compat.h>
++#include <linux/athena.h>
+ 
+ #include <linux/uaccess.h>
+ #include <asm/unistd.h>
+@@ -874,6 +875,9 @@ void __noreturn do_exit(long code)
+ 	perf_event_exit_task(tsk);
+ 
+ 	sched_autogroup_exit_task(tsk);
++#ifdef CONFIG_SCHED_ATHENA
++	pmcs_exit_thread(tsk);
++#endif
+ 	cgroup_exit(tsk);
+ 
+ 	/*
 diff --git a/kernel/fork.c b/kernel/fork.c
-index 0a2124c0a5f5..fa38be3e6079 100644
+index 0a2124c0a5f5..59150329e3ae 100644
 --- a/kernel/fork.c
 +++ b/kernel/fork.c
-@@ -148,6 +148,45 @@ int nr_processes(void)
+@@ -101,6 +101,7 @@
+ #include <asm/mmu_context.h>
+ #include <asm/cacheflush.h>
+ #include <asm/tlbflush.h>
++#include <linux/athena.h>
+ 
+ #include <trace/events/sched.h>
+ 
+@@ -148,6 +149,45 @@ int nr_processes(void)
  	return total;
  }
  
@@ -183,15 +468,26 @@ index 0a2124c0a5f5..fa38be3e6079 100644
  void __weak arch_release_task_struct(struct task_struct *tsk)
  {
  }
-@@ -1723,6 +1762,7 @@ static __latent_entropy struct task_struct *copy_process(
- #ifdef CONFIG_NUMA
- 	p->mempolicy = mpol_dup(p->mempolicy);
- 	if (IS_ERR(p->mempolicy)) {
-+		printk(KERN_DEBUG "[ATHENA] p->mempolicy set failed.\n");
- 		retval = PTR_ERR(p->mempolicy);
- 		p->mempolicy = NULL;
- 		goto bad_fork_cleanup_threadgroup_lock;
-@@ -2115,7 +2155,18 @@ long _do_fork(unsigned long clone_flags,
+@@ -371,6 +411,9 @@ void put_task_stack(struct task_struct *tsk)
+ 
+ void free_task(struct task_struct *tsk)
+ {
++#ifdef CONFIG_SCHED_ATHENA	
++	pmcs_free_per_thread_data(tsk);	
++#endif	
+ #ifndef CONFIG_THREAD_INFO_IN_TASK
+ 	/*
+ 	 * The task is finally done with both the stack and thread_info,
+@@ -1765,7 +1808,7 @@ static __latent_entropy struct task_struct *copy_process(
+ 	p->sequential_io	= 0;
+ 	p->sequential_io_avg	= 0;
+ #endif
+-
++	
+ 	/* Perform scheduler related setup. Assign this task to a CPU. */
+ 	retval = sched_fork(clone_flags, p);
+ 	if (retval)
+@@ -2115,7 +2158,19 @@ long _do_fork(unsigned long clone_flags,
  		init_completion(&vfork);
  		get_task_struct(p);
  	}
@@ -201,18 +497,46 @@ index 0a2124c0a5f5..fa38be3e6079 100644
 +	 * @brief Athena: TODO: These might be done erlier in `copy process`/mpol_dup
 +	 * This is a temporary workaround to bypass numactl
 +	 */
-+	if(sysctl_athena_enable){
-+		if(!(clone_flags & CLONE_VM)){
-+			nodemask_t node_mask = nodemask_of_node(least_bw_nid());
-+			mpol_rebind_mm(p->mm, &node_mask);
-+		}
-+	}	
++	// if(sysctl_athena_enable){
++	// 	if(!(clone_flags & CLONE_VM)){
++	// 		nodemask_t node_mask = nodemask_of_node(least_bw_nid());
++	// 		mpol_rebind_mm(p->mm, &node_mask);
++	// 		sched_setaffinity(p->pid, cpumask_of_node(least_bw_nid()));
++	// 	}
++	// }	
 +#endif
  	wake_up_new_task(p);
  
  	/* forking complete and child started to run, tell ptracer */
+diff --git a/kernel/irq/manage.c b/kernel/irq/manage.c
+index e3336d904f64..e85b785b70c1 100644
+--- a/kernel/irq/manage.c
++++ b/kernel/irq/manage.c
+@@ -244,6 +244,9 @@ int __irq_set_affinity(unsigned int irq, const struct cpumask *mask, bool force)
+ 	raw_spin_unlock_irqrestore(&desc->lock, flags);
+ 	return ret;
+ }
++#ifdef CONFIG_SCHED_ATHENA
++EXPORT_SYMBOL_GPL(__irq_set_affinity);
++#endif
+ 
+ int irq_set_affinity_hint(unsigned int irq, const struct cpumask *m)
+ {
+diff --git a/kernel/irq_work.c b/kernel/irq_work.c
+index 6b7cdf17ccf8..5b663212a426 100644
+--- a/kernel/irq_work.c
++++ b/kernel/irq_work.c
+@@ -86,6 +86,8 @@ bool irq_work_queue_on(struct irq_work *work, int cpu)
+ 	return true;
+ }
+ 
++EXPORT_SYMBOL_GPL(irq_work_queue_on);
++
+ /* Enqueue the irq work @work on the current CPU */
+ bool irq_work_queue(struct irq_work *work)
+ {
 diff --git a/kernel/sched/core.c b/kernel/sched/core.c
-index 211890edf37e..bcbc30582b40 100644
+index 211890edf37e..c7b5daa440c6 100644
 --- a/kernel/sched/core.c
 +++ b/kernel/sched/core.c
 @@ -21,6 +21,15 @@
@@ -231,46 +555,107 @@ index 211890edf37e..bcbc30582b40 100644
  #if defined(CONFIG_SCHED_DEBUG) && defined(HAVE_JUMP_LABEL)
  /*
   * Debugging: various feature bits
-@@ -2201,9 +2210,20 @@ static void __sched_fork(unsigned long clone_flags, struct task_struct *p)
+@@ -2201,6 +2210,7 @@ static void __sched_fork(unsigned long clone_flags, struct task_struct *p)
  	}
  
  	if (clone_flags & CLONE_VM)
 +		/* set the preferred nid of the parent to the child task (thread) */
  		p->numa_preferred_nid = current->numa_preferred_nid;
--	else
-+	else {
-+#ifdef CONFIG_SCHED_ATHENA
-+		if(likely(sysctl_athena_enable)){
-+			// TODO: Athena: set preferred_id least busy node
-+			p->numa_preferred_nid = least_bw_nid();
-+		}else{
-+			p->numa_preferred_nid = -1;
-+		}
-+#else
+ 	else
  		p->numa_preferred_nid = -1;
-+#endif /* CONFIG_SCHED_ATHENA */
-+	}
+@@ -2345,6 +2355,13 @@ int sched_fork(unsigned long clone_flags, struct task_struct *p)
+ 	 */
+ 	p->state = TASK_NEW;
  
- 	p->node_stamp = 0ULL;
- 	p->numa_scan_seq = p->mm ? p->mm->numa_scan_seq : 0;
-@@ -3106,7 +3126,17 @@ void scheduler_tick(void)
++#ifdef CONFIG_SCHED_ATHENA
++	p->prof_enabled = 0;    /* The profiler will be disabled by default */
++	p->pmc = NULL;
++	if (pmcs_alloc_per_thread_data(clone_flags,p))
++		return -ENOMEM;
++#endif
++
+ 	/*
+ 	 * Make sure we do not leak PI boosting priority to the child.
+ 	 */
+@@ -2718,6 +2735,9 @@ static struct rq *finish_task_switch(struct task_struct *prev)
+ 	vtime_task_switch(prev);
+ 	perf_event_task_sched_in(prev, current);
+ 	finish_task(prev);
++#ifdef CONFIG_SCHED_ATHENA
++	pmcs_restore_callback(current->pmc, smp_processor_id()); 		
++#endif	
+ 	finish_lock_switch(rq);
+ 	finish_arch_post_lock_switch();
+ 
+@@ -2997,6 +3017,9 @@ void sched_exec(void)
+ 	unsigned long flags;
+ 	int dest_cpu;
+ 
++#ifdef CONFIG_SCHED_ATHENA
++	pmcs_exec_thread(p);
++#endif	
+ 	raw_spin_lock_irqsave(&p->pi_lock, flags);
+ 	dest_cpu = p->sched_class->select_task_rq(p, task_cpu(p), SD_BALANCE_EXEC, 0);
+ 	if (dest_cpu == smp_processor_id())
+@@ -3095,6 +3118,10 @@ void scheduler_tick(void)
+ 
+ 	sched_clock_tick();
+ 
++#ifdef CONFIG_SCHED_ATHENA
++	pmcs_tbs_tick(curr->pmc, cpu);
++#endif
++
+ 	rq_lock(rq, &rf);
+ 
+ 	update_rq_clock(rq);
+@@ -3106,7 +3133,17 @@ void scheduler_tick(void)
  
  	perf_event_task_tick();
  
 +
  #ifdef CONFIG_SMP
 +#ifdef CONFIG_SCHED_ATHENA
-+	if (sysctl_athena_enable){
-+		if ((this_cpu_ptr(&pmc_sample)->next_sample == 0) 
-+				|| time_after_eq(jiffies, this_cpu_ptr(&pmc_sample)->next_sample)){
-+			update_pmcs();
-+		}
-+	}
++	// if (sysctl_athena_enable){
++	// 	if ((this_cpu_ptr(&pmc_sample)->next_sample == 0) 
++	// 			|| time_after_eq(jiffies, this_cpu_ptr(&pmc_sample)->next_sample)){
++	// 		update_pmcs();
++	// 	}
++	// }
 +#endif
 +
  	rq->idle_balance = idle_cpu(cpu);
  	trigger_load_balance(rq);
  #endif
+@@ -3512,6 +3549,9 @@ static void __sched notrace __schedule(bool preempt)
+ 		 */
+ 		++*switch_count;
+ 
++#ifdef CONFIG_SCHED_ATHENA
++		pmcs_save_callback(prev->pmc, cpu);
++#endif		
+ 		trace_sched_switch(preempt, prev, next);
+ 
+ 		/* Also unlocks the rq: */
+@@ -4066,11 +4106,19 @@ struct task_struct *idle_task(int cpu)
+  *
+  * The task of @pid, if found. %NULL otherwise.
+  */
++#ifdef CONFIG_SCHED_ATHENA
++struct task_struct *find_process_by_pid(pid_t pid)
++#else
+ static struct task_struct *find_process_by_pid(pid_t pid)
++#endif
+ {
+ 	return pid ? find_task_by_vpid(pid) : current;
+ }
+ 
++#ifdef CONFIG_SCHED_ATHENA
++EXPORT_SYMBOL_GPL(find_process_by_pid);  
++#endif
++ 
+ /*
+  * sched_setparam() passes in -1 for its policy, to let the functions
+  * it calls know not to change it.
 diff --git a/kernel/sched/fair.c b/kernel/sched/fair.c
 index edf3a5e7e728..c10766bec682 100644
 --- a/kernel/sched/fair.c
@@ -467,10 +852,18 @@ index edf3a5e7e728..c10766bec682 100644
 +#endif /* CONFIG_NUMA */
 \ No newline at end of file
 diff --git a/kernel/sched/sched.h b/kernel/sched/sched.h
-index cb467c221b15..047e620b6ca1 100644
+index cb467c221b15..3f854fb55c82 100644
 --- a/kernel/sched/sched.h
 +++ b/kernel/sched/sched.h
-@@ -1038,6 +1038,7 @@ static inline void rq_repin_lock(struct rq *rq, struct rq_flags *rf)
+@@ -51,6 +51,7 @@
+ #include <linux/migrate.h>
+ #include <linux/mmu_context.h>
+ #include <linux/nmi.h>
++#include <linux/athena.h>
+ #include <linux/proc_fs.h>
+ #include <linux/prefetch.h>
+ #include <linux/profile.h>
+@@ -1038,6 +1039,7 @@ static inline void rq_repin_lock(struct rq *rq, struct rq_flags *rf)
  }
  
  #ifdef CONFIG_NUMA
@@ -478,7 +871,7 @@ index cb467c221b15..047e620b6ca1 100644
  enum numa_topology_type {
  	NUMA_DIRECT,
  	NUMA_GLUELESS_MESH,
-@@ -1046,6 +1047,7 @@ enum numa_topology_type {
+@@ -1046,6 +1048,7 @@ enum numa_topology_type {
  extern enum numa_topology_type sched_numa_topology_type;
  extern int sched_max_numa_distance;
  extern bool find_numa_distance(int distance);
