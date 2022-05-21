@@ -59,34 +59,36 @@ index 45b2b1c93d04..2b8a764c7d25 100644
  static inline void x86_pmu_read(struct perf_event *event)
 diff --git a/include/linux/athena.h b/include/linux/athena.h
 new file mode 100644
-index 000000000000..0c4a3ddcf44e
+index 000000000000..90f749126f37
 --- /dev/null
 +++ b/include/linux/athena.h
-@@ -0,0 +1,25 @@
+@@ -0,0 +1,27 @@
 +#ifndef ATHENA_H
 +#define ATHENA_H
 +#include <linux/types.h>
 +#include <linux/sched.h>
 +
 +struct athena_pmc_callbacks {
-+	int 	(*pmcs_alloc_per_thread_data)(unsigned long,struct task_struct*);
-+	void	(*pmcs_save_callback)(void*, int);
-+	void	(*pmcs_restore_callback)(void*, int);
-+	void 	(*pmcs_tbs_tick)(void*, int);
-+	void	(*pmcs_exec_thread)(struct task_struct*);
-+	void	(*pmcs_free_per_thread_data)(struct task_struct*);
-+	void	(*pmcs_exit_thread)(struct task_struct*);
-+	int		(*get_pmc_val)(struct task_struct* task, uint64_t pmc_event, uint64_t* value);
++	int (*pmcs_alloc_per_thread_data)(unsigned long, struct task_struct *);
++	void (*pmcs_save_callback)(struct task_struct *, int);
++	void (*pmcs_restore_callback)(struct task_struct *, int);
++	void (*pmcs_tbs_tick)(struct task_struct *, int);
++	void (*pmcs_exec_thread)(struct task_struct *);
++	void (*pmcs_free_per_thread_data)(struct task_struct *);
++	void (*pmcs_exit_thread)(struct task_struct *);
++	int (*get_pmc_val)(struct task_struct *task, uint64_t pmc_event,
++			   uint64_t *value);
 +};
 +
-+int get_pmc_val(struct task_struct* task, uint64_t pmc_event, uint64_t* value);
-+int pmcs_alloc_per_thread_data(unsigned long clone_flags, struct task_struct *p);
-+void pmcs_save_callback(void* prof, int cpu);
-+void pmcs_restore_callback(void* prof, int cpu);
-+void pmcs_tbs_tick(void* prof, int cpu);
-+void pmcs_exec_thread(struct task_struct* tsk);
-+void pmcs_free_per_thread_data(struct task_struct* tsk);
-+void pmcs_exit_thread(struct task_struct* tsk);
++int get_pmc_val(struct task_struct *task, uint64_t pmc_event, uint64_t *value);
++int pmcs_alloc_per_thread_data(unsigned long clone_flags,
++			       struct task_struct *p);
++void pmcs_save_callback(struct task_struct *task, int cpu);
++void pmcs_restore_callback(struct task_struct *task, int cpu);
++void pmcs_tbs_tick(struct task_struct *task, int cpu);
++void pmcs_exec_thread(struct task_struct *task);
++void pmcs_free_per_thread_data(struct task_struct *task);
++void pmcs_exit_thread(struct task_struct *task);
 +#endif
 \ No newline at end of file
 diff --git a/include/linux/numa.h b/include/linux/numa.h
@@ -112,71 +114,115 @@ index 110b0e5d0fb0..33c3eca23dcb 100644
 +
  #endif /* _LINUX_NUMA_H */
 diff --git a/include/linux/sched.h b/include/linux/sched.h
-index ca3f3eae8980..181ffa8ecadc 100644
+index ca3f3eae8980..95d7874c3da1 100644
 --- a/include/linux/sched.h
 +++ b/include/linux/sched.h
-@@ -1168,6 +1168,10 @@ struct task_struct {
+@@ -66,47 +66,49 @@ struct task_group;
+  */
+ 
+ /* Used in tsk->state: */
+-#define TASK_RUNNING			0x0000
+-#define TASK_INTERRUPTIBLE		0x0001
+-#define TASK_UNINTERRUPTIBLE		0x0002
+-#define __TASK_STOPPED			0x0004
+-#define __TASK_TRACED			0x0008
++#define TASK_RUNNING 0x0000
++#define TASK_INTERRUPTIBLE 0x0001
++#define TASK_UNINTERRUPTIBLE 0x0002
++#define __TASK_STOPPED 0x0004
++#define __TASK_TRACED 0x0008
+ /* Used in tsk->exit_state: */
+-#define EXIT_DEAD			0x0010
+-#define EXIT_ZOMBIE			0x0020
+-#define EXIT_TRACE			(EXIT_ZOMBIE | EXIT_DEAD)
++#define EXIT_DEAD 0x0010
++#define EXIT_ZOMBIE 0x0020
++#define EXIT_TRACE (EXIT_ZOMBIE | EXIT_DEAD)
+ /* Used in tsk->state again: */
+-#define TASK_PARKED			0x0040
+-#define TASK_DEAD			0x0080
+-#define TASK_WAKEKILL			0x0100
+-#define TASK_WAKING			0x0200
+-#define TASK_NOLOAD			0x0400
+-#define TASK_NEW			0x0800
+-#define TASK_STATE_MAX			0x1000
++#define TASK_PARKED 0x0040
++#define TASK_DEAD 0x0080
++#define TASK_WAKEKILL 0x0100
++#define TASK_WAKING 0x0200
++#define TASK_NOLOAD 0x0400
++#define TASK_NEW 0x0800
++#define TASK_STATE_MAX 0x1000
+ 
+ /* Convenience macros for the sake of set_current_state: */
+-#define TASK_KILLABLE			(TASK_WAKEKILL | TASK_UNINTERRUPTIBLE)
+-#define TASK_STOPPED			(TASK_WAKEKILL | __TASK_STOPPED)
+-#define TASK_TRACED			(TASK_WAKEKILL | __TASK_TRACED)
++#define TASK_KILLABLE (TASK_WAKEKILL | TASK_UNINTERRUPTIBLE)
++#define TASK_STOPPED (TASK_WAKEKILL | __TASK_STOPPED)
++#define TASK_TRACED (TASK_WAKEKILL | __TASK_TRACED)
+ 
+-#define TASK_IDLE			(TASK_UNINTERRUPTIBLE | TASK_NOLOAD)
++#define TASK_IDLE (TASK_UNINTERRUPTIBLE | TASK_NOLOAD)
+ 
+ /* Convenience macros for the sake of wake_up(): */
+-#define TASK_NORMAL			(TASK_INTERRUPTIBLE | TASK_UNINTERRUPTIBLE)
++#define TASK_NORMAL (TASK_INTERRUPTIBLE | TASK_UNINTERRUPTIBLE)
+ 
+ /* get_task_state(): */
+-#define TASK_REPORT			(TASK_RUNNING | TASK_INTERRUPTIBLE | \
+-					 TASK_UNINTERRUPTIBLE | __TASK_STOPPED | \
+-					 __TASK_TRACED | EXIT_DEAD | EXIT_ZOMBIE | \
+-					 TASK_PARKED)
++#define TASK_REPORT                                                            \
++	(TASK_RUNNING | TASK_INTERRUPTIBLE | TASK_UNINTERRUPTIBLE |            \
++	 __TASK_STOPPED | __TASK_TRACED | EXIT_DEAD | EXIT_ZOMBIE |            \
++	 TASK_PARKED)
+ 
+-#define task_is_traced(task)		((task->state & __TASK_TRACED) != 0)
++#define task_is_traced(task) ((task->state & __TASK_TRACED) != 0)
+ 
+-#define task_is_stopped(task)		((task->state & __TASK_STOPPED) != 0)
++#define task_is_stopped(task) ((task->state & __TASK_STOPPED) != 0)
+ 
+-#define task_is_stopped_or_traced(task)	((task->state & (__TASK_STOPPED | __TASK_TRACED)) != 0)
++#define task_is_stopped_or_traced(task)                                        \
++	((task->state & (__TASK_STOPPED | __TASK_TRACED)) != 0)
+ 
+-#define task_contributes_to_load(task)	((task->state & TASK_UNINTERRUPTIBLE) != 0 && \
++#define task_contributes_to_load(task)                                         \
++	((task->state & TASK_UNINTERRUPTIBLE) != 0 && \
+ 					 (task->flags & PF_FROZEN) == 0 && \
+ 					 (task->state & TASK_NOLOAD) == 0)
+ 
+@@ -1168,6 +1170,10 @@ struct task_struct {
  	void				*security;
  #endif
  
 +#ifdef CONFIG_SCHED_ATHENA 
-+       void *pmc;                      /* Per-thread PMC-specific data. Would be allocated by the kernel module */
++       struct pmc_sample_struct *pmc;                      /* Per-thread PMC-specific data. Would be allocated by the kernel module */
 +       unsigned char prof_enabled;     /* This field must be one for the profiler to be active in the current task */
 +#endif
  	/*
  	 * New fields for task_struct should be added above here, so that
  	 * they are included in the randomized portion of task_struct.
-@@ -1764,4 +1768,57 @@ extern long sched_getaffinity(pid_t pid, struct cpumask *mask);
+@@ -1764,4 +1770,23 @@ extern long sched_getaffinity(pid_t pid, struct cpumask *mask);
  #define TASK_SIZE_OF(tsk)	TASK_SIZE
  #endif
  
 +#ifdef CONFIG_SCHED_ATHENA
 +
-+#define PMC_ESEL_UMASK_SHIFT 8
-+#define PMC_ESEL_CMASK_SHIFT 24
-+#define PMC_ESEL_ENTRY(event, umask, cmask)       \
-+    (((event)&0xFFUL) |                           \
-+     (((umask)&0xFFUL) << PMC_ESEL_UMASK_SHIFT) | \
-+     (((cmask)&0xFFUL) << PMC_ESEL_CMASK_SHIFT))
-+
-+#define PMC_ESEL_USR (1ULL << 16)    /* User Mode */
-+#define PMC_ESEL_OS (1ULL << 17)     /* Kernel Mode */
-+#define PMC_ESEL_EDGE (1ULL << 18)   /* Edge detect */
-+#define PMC_ESEL_PC (1ULL << 19)     /* Pin control */
-+#define PMC_ESEL_INT (1ULL << 20)    /* APIC interrupt enable */
-+#define PMC_ESEL_ANY (1ULL << 21)    /* Any thread */
-+#define PMC_ESEL_ENABLE (1ULL << 22) /* Enable counters */
-+#define PMC_ESEL_INV (1ULL << 23)    /* Invert counter mask */
-+
-+/* architectural performance counters (works on all Intel CPUs) */
-+#define PMC_ARCH_CORE_CYCLES PMC_ESEL_ENTRY(0x3C, 0x00, 0)
-+#define PMC_ARCH_INSTR_RETIRED PMC_ESEL_ENTRY(0xC0, 0x00, 0)
-+#define PMC_ARCH_REF_CYCLES PMC_ESEL_ENTRY(0x3C, 0x01, 0)
-+#define PMC_ARCH_LLC_REF PMC_ESEL_ENTRY(0x2E, 0x4F, 0)
-+#define PMC_ARCH_LLC_MISSES PMC_ESEL_ENTRY(0x2E, 0x41, 0)
-+#define PMC_ARCH_BRANCHES PMC_ESEL_ENTRY(0xC4, 0x00, 0)
-+#define PMC_ARCH_BRANCH_MISSES PMC_ESEL_ENTRY(0xC5, 0x00, 0)
-+
-+/* this performance counter measures LLC misses as a proxy for mem bandwidth */
-+#define PMC_LLC_MISSES (PMC_ARCH_LLC_MISSES | PMC_ESEL_USR | PMC_ESEL_OS | \
-+                        PMC_ESEL_ENABLE)
-+#define PMC_LLC_MISSES_ANY (PMC_ARCH_LLC_MISSES | PMC_ESEL_USR | PMC_ESEL_OS | \
-+                            PMC_ESEL_ANY | PMC_ESEL_ENABLE)
-+
-+#define IA32_PERF_GLOBAL_CTRL_ENABLE 0x70000000f
-+#define IA32_PERF_FIXED_CTRL_ENABLE 0x333
-+
-+#define PMC_UPDATE_PERIOD_MS 3000 /* The time interval to update the PMU counters */
++// #define PMC_UPDATE_PERIOD_MS 3000 /* The time interval to update the PMU counters */
 +
 +typedef struct {
 +	u64 val;
 +	u64 rate;
-+	uint64_t tsc;  /* cycles. not used yet */
-+	bool enable; /* enable or disable counter */
++	uint64_t rate_tsc;  /* cycles. not used yet */
++	uint64_t total_tsc;  /* cycles. not used yet */
 +} pmc_t;
 +
 +struct pmc_sample_struct {
-+	unsigned long next_sample;  /* next jiffies to update the global sampling */
++	unsigned long next_sample_jiffies;  /* next jiffies to update the global sampling */
 +	pmc_t llc_miss;
 +	pmc_t dtlb_miss; /* not used yet */
 +};
@@ -222,10 +268,10 @@ index f85ae5dfa474..45cb7c11c874 100644
  obj-$(CONFIG_PROFILING) += profile.o
 diff --git a/kernel/athena.c b/kernel/athena.c
 new file mode 100644
-index 000000000000..9ff5cf14c6bc
+index 000000000000..35cfd6781926
 --- /dev/null
 +++ b/kernel/athena.c
-@@ -0,0 +1,162 @@
+@@ -0,0 +1,161 @@
 +#include <linux/athena.h>
 +#include <linux/list.h>
 +#include <linux/err.h>
@@ -240,14 +286,13 @@ index 000000000000..9ff5cf14c6bc
 +
 +EXPORT_SYMBOL(pmc_callbacks);
 +
-+
 +/* Invoked when forking a process/thread */
 +int pmcs_alloc_per_thread_data(unsigned long clone_flags, struct task_struct *p)
 +{
 +	int ret = 0;
 +	unsigned long flags;
 +
-+	if(!sysctl_athena_enable)
++	if (!sysctl_athena_enable)
 +		return 0;
 +
 +	read_lock_irqsave(&pmc_ops_lock, flags);
@@ -266,9 +311,9 @@ index 000000000000..9ff5cf14c6bc
 +}
 +
 +/* Invoked when a context switch out takes place */
-+void pmcs_save_callback(void *prof, int cpu)
++void pmcs_save_callback(struct task_struct *task, int cpu)
 +{
-+	if(!sysctl_athena_enable)
++	if (!sysctl_athena_enable)
 +		return;
 +
 +	if (!pmc_callbacks.pmcs_save_callback)
@@ -276,15 +321,15 @@ index 000000000000..9ff5cf14c6bc
 +
 +	rcu_read_lock();
 +
-+	pmc_callbacks.pmcs_save_callback(prof, cpu);
++	pmc_callbacks.pmcs_save_callback(task, cpu);
 +
 +	rcu_read_unlock();
 +}
 +
 +/* Invoked when a context switch in takes place */
-+void pmcs_restore_callback(void *prof, int cpu)
++void pmcs_restore_callback(struct task_struct *task, int cpu)
 +{
-+	if(!sysctl_athena_enable)
++	if (!sysctl_athena_enable)
 +		return;
 +
 +	if (!pmc_callbacks.pmcs_restore_callback)
@@ -292,15 +337,15 @@ index 000000000000..9ff5cf14c6bc
 +
 +	rcu_read_lock();
 +
-+	pmc_callbacks.pmcs_restore_callback(prof, cpu);
++	pmc_callbacks.pmcs_restore_callback(task, cpu);
 +
 +	rcu_read_unlock();
 +}
 +
 +/* Invoked from scheduler_tick() */
-+void pmcs_tbs_tick(void *prof, int cpu)
++void pmcs_tbs_tick(struct task_struct *task, int cpu)
 +{
-+	if(!sysctl_athena_enable)
++	if (!sysctl_athena_enable)
 +		return;
 +
 +	if (!pmc_callbacks.pmcs_tbs_tick)
@@ -308,15 +353,15 @@ index 000000000000..9ff5cf14c6bc
 +
 +	rcu_read_lock();
 +
-+	pmc_callbacks.pmcs_tbs_tick(prof, cpu);
++	pmc_callbacks.pmcs_tbs_tick(task, cpu);
 +
 +	rcu_read_unlock();
 +}
 +
 +/* Invoked when a process calls exec() */
-+void pmcs_exec_thread(struct task_struct *tsk)
++void pmcs_exec_thread(struct task_struct *task)
 +{
-+	if(!sysctl_athena_enable)
++	if (!sysctl_athena_enable)
 +		return;
 +
 +	if (!pmc_callbacks.pmcs_exec_thread)
@@ -324,17 +369,17 @@ index 000000000000..9ff5cf14c6bc
 +
 +	rcu_read_lock();
 +
-+	pmc_callbacks.pmcs_exec_thread(tsk);
++	pmc_callbacks.pmcs_exec_thread(task);
 +
 +	rcu_read_unlock();
 +}
 +
 +/* Invoked when the kernel frees up the process descriptor */
-+void pmcs_free_per_thread_data(struct task_struct *tsk)
++void pmcs_free_per_thread_data(struct task_struct *task)
 +{
 +	unsigned long flags;
 +
-+	if(!sysctl_athena_enable)
++	if (!sysctl_athena_enable)
 +		return;
 +
 +	read_lock_irqsave(&pmc_ops_lock, flags);
@@ -346,15 +391,15 @@ index 000000000000..9ff5cf14c6bc
 +
 +	read_unlock_irqrestore(&pmc_ops_lock, flags);
 +
-+	pmc_callbacks.pmcs_free_per_thread_data(tsk);
++	pmc_callbacks.pmcs_free_per_thread_data(task);
 +}
 +
 +/* Invoked when a process exits */
-+void pmcs_exit_thread(struct task_struct *tsk)
++void pmcs_exit_thread(struct task_struct *task)
 +{
 +	unsigned long flags;
 +
-+	if(!sysctl_athena_enable)
++	if (!sysctl_athena_enable)
 +		return;
 +
 +	read_lock_irqsave(&pmc_ops_lock, flags);
@@ -366,7 +411,7 @@ index 000000000000..9ff5cf14c6bc
 +
 +	read_unlock_irqrestore(&pmc_ops_lock, flags);
 +
-+	pmc_callbacks.pmcs_exit_thread(tsk);
++	pmc_callbacks.pmcs_exit_thread(task);
 +}
 +
 +/* Call this function to get value of a counter */
@@ -374,7 +419,7 @@ index 000000000000..9ff5cf14c6bc
 +{
 +	int ret = -1;
 +
-+	if(!sysctl_athena_enable)
++	if (!sysctl_athena_enable)
 +		return ret;
 +
 +	if (!pmc_callbacks.get_pmc_val)
@@ -536,7 +581,7 @@ index 6b7cdf17ccf8..5b663212a426 100644
  bool irq_work_queue(struct irq_work *work)
  {
 diff --git a/kernel/sched/core.c b/kernel/sched/core.c
-index 211890edf37e..c7b5daa440c6 100644
+index 211890edf37e..001f928613e6 100644
 --- a/kernel/sched/core.c
 +++ b/kernel/sched/core.c
 @@ -21,6 +21,15 @@
@@ -582,7 +627,7 @@ index 211890edf37e..c7b5daa440c6 100644
  	perf_event_task_sched_in(prev, current);
  	finish_task(prev);
 +#ifdef CONFIG_SCHED_ATHENA
-+	pmcs_restore_callback(current->pmc, smp_processor_id()); 		
++	pmcs_restore_callback(current, smp_processor_id()); 		
 +#endif	
  	finish_lock_switch(rq);
  	finish_arch_post_lock_switch();
@@ -602,7 +647,7 @@ index 211890edf37e..c7b5daa440c6 100644
  	sched_clock_tick();
  
 +#ifdef CONFIG_SCHED_ATHENA
-+	pmcs_tbs_tick(curr->pmc, cpu);
++	pmcs_tbs_tick(curr, cpu);
 +#endif
 +
  	rq_lock(rq, &rf);
@@ -631,7 +676,7 @@ index 211890edf37e..c7b5daa440c6 100644
  		++*switch_count;
  
 +#ifdef CONFIG_SCHED_ATHENA
-+		pmcs_save_callback(prev->pmc, cpu);
++		pmcs_save_callback(prev, cpu);
 +#endif		
  		trace_sched_switch(preempt, prev, next);
  
@@ -657,37 +702,22 @@ index 211890edf37e..c7b5daa440c6 100644
   * sched_setparam() passes in -1 for its policy, to let the functions
   * it calls know not to change it.
 diff --git a/kernel/sched/fair.c b/kernel/sched/fair.c
-index edf3a5e7e728..c10766bec682 100644
+index edf3a5e7e728..934076b281f8 100644
 --- a/kernel/sched/fair.c
 +++ b/kernel/sched/fair.c
-@@ -25,6 +25,16 @@
- 
- #include <trace/events/sched.h>
- 
-+#ifdef CONFIG_NUMA
-+#ifdef CONFIG_SCHED_ATHENA
-+
-+/* Holds a calculated number indicating the bandwidth bussiness of each NUMA node */
-+// uint64_t numa_nodes_memory_usage_rate[NR_NODES] = {0};
-+
-+#endif
-+#endif
-+
-+
- /*
-  * Targeted preemption latency for CPU-bound tasks:
-  *
-@@ -1040,6 +1050,9 @@ unsigned int sysctl_numa_balancing_scan_delay = 1000;
+@@ -1040,6 +1040,11 @@ unsigned int sysctl_numa_balancing_scan_delay = 1000;
  /* enable/disable control for pgtable migration feature */
  unsigned int sysctl_numa_pgtable_migration = 0;
  
 +/* enable/disable for Athena pgtable-aware scheduler */
 +unsigned int sysctl_athena_enable = 0;
 +
++EXPORT_SYMBOL(sysctl_athena_enable);
++
  struct numa_group {
  	atomic_t refcount;
  
-@@ -10450,3 +10463,162 @@ __init void init_sched_fair_class(void)
+@@ -10450,3 +10455,143 @@ __init void init_sched_fair_class(void)
  #endif /* SMP */
  
  }
@@ -704,23 +734,23 @@ index edf3a5e7e728..c10766bec682 100644
 +/**
 + * @brief Construct a new define per cpu object
 + */
-+DEFINE_PER_CPU(struct pmc_sample_struct, pmc_sample);
++// DEFINE_PER_CPU(struct pmc_sample_struct, pmc_sample);
 +
-+EXPORT_PER_CPU_SYMBOL(pmc_sample);
++// EXPORT_PER_CPU_SYMBOL(pmc_sample);
 +
 +/* TODO: Following functions might be better to be in independent module */
 +
-+/**
-+ * @brief Triggers a pmc event selector
-+ * 
-+ * @param event_sel 
-+ * @param store_register a general purpose pmu reg
-+ */
-+void start_pmc_event(u64 event_sel, u64 store_register){
-+	wrmsrl(store_register, event_sel);
-+}
++// /**
++//  * @brief Triggers a pmc event selector
++//  * 
++//  * @param event_sel 
++//  * @param store_register a general purpose pmu reg
++//  */
++// void start_pmc_event(u64 event_sel, u64 store_register){
++// 	wrmsrl(store_register, event_sel);
++// }
 +
-+EXPORT_SYMBOL(start_pmc_event);
++// EXPORT_SYMBOL(start_pmc_event);
 +
 +/**
 + * @brief Triggers a pmc event selector for specific cpu
@@ -728,91 +758,82 @@ index edf3a5e7e728..c10766bec682 100644
 + * @param event_sel 
 + * @param store_register a general purpose pmu reg
 + */
-+void start_cpu_pmc_event(int cpu, u64 event_sel, u64 store_register){
-+	wrmsrl_on_cpu(cpu, store_register, event_sel);
-+}
++// void start_cpu_pmc_event(int cpu, u64 event_sel, u64 store_register){
++// 	wrmsrl_on_cpu(cpu, store_register, event_sel);
++// }
 +
-+EXPORT_SYMBOL(start_cpu_pmc_event);
++// EXPORT_SYMBOL(start_cpu_pmc_event);
 +
-+/**
-+ * @brief read a single MSR register
-+ * 
-+ * @param from_register 
-+ * @return u64 
-+ */
-+u64 read_pmc_val(u64 from_register){
-+	u64 val;
-+	rdmsrl(from_register, val);
-+	return val;
-+}
++// /**
++//  * @brief read a single MSR register
++//  * 
++//  * @param from_register 
++//  * @return u64 
++//  */
++// u64 read_pmc_val(u64 from_register){
++// 	u64 val;
++// 	rdmsrl(from_register, val);
++// 	return val;
++// }
 +
-+EXPORT_SYMBOL(read_pmc_val);
++// EXPORT_SYMBOL(read_pmc_val);
 +
-+/**
-+ * @brief update a single counter
-+ * 
-+ * @param event_sel 
-+ */
-+void update_pmc(unsigned long long event_sel){
-+	u64 val;
-+	switch (event_sel) {
-+	case PMC_LLC_MISSES:
-+		/* TODO: May be optimized */
-+		val = read_pmc_val(MSR_IA32_PERFCTR0);
-+		this_cpu_ptr(&pmc_sample)->llc_miss.rate
-+					= val - this_cpu_ptr(&pmc_sample)->llc_miss.val;
-+		this_cpu_ptr(&pmc_sample)->llc_miss.val = val;
-+		break;
-+	default:
-+		// panic?!
-+		break;
-+	}
-+}
++// /**
++//  * @brief update a single counter
++//  * 
++//  * @param event_sel 
++//  */
++// void update_pmc(unsigned long long event_sel){
++// 	u64 val;
++// 	switch (event_sel) {
++// 	case PMC_LLC_MISSES:
++// 		/* TODO: May be optimized */
++// 		val = read_pmc_val(MSR_IA32_PERFCTR0);
++// 		this_cpu_ptr(&pmc_sample)->llc_miss.rate
++// 					= val - this_cpu_ptr(&pmc_sample)->llc_miss.val;
++// 		this_cpu_ptr(&pmc_sample)->llc_miss.val = val;
++// 		break;
++// 	default:
++// 		// panic?!
++// 		break;
++// 	}
++// }
 +
-+EXPORT_SYMBOL(update_pmc);
++// EXPORT_SYMBOL(update_pmc);
 +
-+/**
-+ * @brief update all pmc_sample_struct counters
-+ */
-+void update_pmcs(void){
-+	update_pmc(PMC_LLC_MISSES);
-+	/* Read dTLB Misses and other counters */
-+	this_cpu_ptr(&pmc_sample)->next_sample = jiffies + msecs_to_jiffies(PMC_UPDATE_PERIOD_MS);
-+}
++// /**
++//  * @brief update all pmc_sample_struct counters
++//  */
++// void update_pmcs(void){
++// 	update_pmc(PMC_LLC_MISSES);
++// 	/* Read dTLB Misses and other counters */
++// 	this_cpu_ptr(&pmc_sample)->next_sample = jiffies + msecs_to_jiffies(PMC_UPDATE_PERIOD_MS);
++// }
 +
-+EXPORT_SYMBOL(update_pmcs);
++// EXPORT_SYMBOL(update_pmcs);
 +
-+/**
-+ * @brief Returns the node id with least memory BW usage.
-+ * TODO: This should be optimized to reduce the overhead of loops.
-+ * 		 Probably with some data structure instead of dynamic calc.
-+ */
-+int least_bw_nid(void){
-+	int node, cpu;
-+	u64 ret_node = 0, node_rate = 0;
-+	for_each_node(node){
-+		u64 tmp = 0;
-+		for_each_cpu(cpu, cpumask_of_node(node)){
-+			tmp += per_cpu(pmc_sample, cpu).llc_miss.rate;
-+		}
-+		if ((node == 0) || (node_rate > tmp)){
-+			node_rate = tmp;
-+			ret_node = node;
-+		}
-+	}
-+	return ret_node;
-+}
++// /**
++//  * @brief Returns the node id with least memory BW usage.
++//  * TODO: This should be optimized to reduce the overhead of loops.
++//  * 		 Probably with some data structure instead of dynamic calc.
++//  */
++// int least_bw_nid(void){
++// 	int node, cpu;
++// 	u64 ret_node = 0, node_rate = 0;
++// 	for_each_node(node){
++// 		u64 tmp = 0;
++// 		for_each_cpu(cpu, cpumask_of_node(node)){
++// 			tmp += per_cpu(pmc_sample, cpu).llc_miss.rate;
++// 		}
++// 		if ((node == 0) || (node_rate > tmp)){
++// 			node_rate = tmp;
++// 			ret_node = node;
++// 		}
++// 	}
++// 	return ret_node;
++// }
 +
-+EXPORT_SYMBOL(least_bw_nid);
-+
-+void __athena_init_pmc(void){
-+	// enable fixed function counters
-+    wrmsrl(MSR_CORE_PERF_FIXED_CTR_CTRL, IA32_PERF_FIXED_CTRL_ENABLE);
-+	// enable global general purpose counters
-+    wrmsrl(MSR_CORE_PERF_GLOBAL_CTRL, IA32_PERF_GLOBAL_CTRL_ENABLE);
-+}
-+
-+EXPORT_SYMBOL(__athena_init_pmc);
++// EXPORT_SYMBOL(least_bw_nid);
 +
 +/* enable/disable handler of sysctl_sched_enable variable.*/
 +int sched_athena_enable_handler(struct ctl_table *table, int write, void __user *buffer,
@@ -832,16 +853,6 @@ index edf3a5e7e728..c10766bec682 100644
 +	/*
 +	 * Perform required actions here.
 +	 */
-+	if(sysctl_athena_enable){
-+		int cpu;
-+		__athena_init_pmc();
-+		// Trigger LLC miss counter
-+		for_each_possible_cpu(cpu){
-+			start_cpu_pmc_event(cpu, PMC_LLC_MISSES, MSR_P6_EVNTSEL0);
-+		}
-+	}else {
-+		// TODO: reset pmu counters/registers
-+	}
 +	
 +	printk(KERN_DEBUG "[ATHENA] enabled: %i\n", sysctl_athena_enable);
 +	
